@@ -1,19 +1,13 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { DebugReviewLogger } from "#src/logging/session-logger";
 import type { AuthorizerLog, PermissionQuery } from "#src/service";
-import type { PermissionEventBus } from "#src/service/permission-events";
 import { ParentAuthorizer } from "./approval-escalator";
 import { DenyingAuthorizer } from "./denying-authorizer";
 import { getSessionId } from "./forwarder-context";
 import type { TargetServingLookup } from "./forwarding-liveness";
-import { LocalUserAuthorizer } from "./local-user-authorizer";
 import type { PermissionPromptDecision } from "./permission-dialog";
 import type { PermissionForwardingTarget } from "./permission-forwarding";
 import { resolvePermissionForwardingTarget } from "./permission-forwarding";
-import type {
-  PromptPreferences,
-  requestPermissionDecision,
-} from "./permission-prompt-component";
 import type { PromptPermissionDetails } from "./permission-prompter";
 import type { SubagentDetector } from "./subagent-detection";
 import type { SubagentSessionRegistry } from "./subagent-registry";
@@ -108,12 +102,16 @@ export interface SelectedAuthority {
 export interface AuthorizerSelectionDeps {
   /** Single owner of subagent detection; the ParentAuthorizer-selection predicate. */
   detection: SubagentDetector;
-  /** Event bus used by `LocalUserAuthorizer` for the `permissions:ui_prompt` broadcast. */
-  events: PermissionEventBus;
-  /** Read live at prompt time; threaded into `LocalUserAuthorizer`. */
-  getPromptPreferences: () => PromptPreferences;
-  /** Injected for testability; production callers pass the real function. */
-  requestPermissionDecision: typeof requestPermissionDecision;
+  /**
+   * Construct the direct local terminal for the active UI context.
+   *
+   * A factory rather than the terminal's own dependencies: the local dialog
+   * is the one terminal that may mutate durable policy, and what it needs for
+   * that (the session's cwd and trust decision) exists only once a context
+   * does. Keeping those out of this interface keeps them out of the relay and
+   * deny arms, which must never persist anything.
+   */
+  createLocalAuthorizer(ctx: ExtensionContext): TerminalAuthorizer;
   /** Forwarding directory `ParentAuthorizer` reads/writes request and response files under. */
   forwardingDir: string;
   /** In-process subagent session registry for forwarding target resolution. */
@@ -143,13 +141,7 @@ export function selectAuthorizer(
     const relayTarget = resolveLiveRelayTarget(ctx, deps);
     if (relayTarget === null) {
       return {
-        terminal: new LocalUserAuthorizer({
-          ui: ctx.ui,
-          mode: ctx.mode,
-          events: deps.events,
-          getPromptPreferences: deps.getPromptPreferences,
-          requestPermissionDecision: deps.requestPermissionDecision,
-        }),
+        terminal: deps.createLocalAuthorizer(ctx),
         adjudicatesLocally: true,
       };
     }
